@@ -1,0 +1,43 @@
+.App {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  margin: 0;
+  padding: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.odontograma-sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.odontograma-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.odontograma-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.odontograma-sidebar:hover::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.45);
+  background-clip: content-box;
+}
+
+.historico-date-input::-webkit-calendar-picker-indicator {
+  filter: brightness(0) saturate(100%);
+  opacity: 1;
+  cursor: pointer;
+}
