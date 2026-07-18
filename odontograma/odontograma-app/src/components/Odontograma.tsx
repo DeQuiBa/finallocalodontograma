@@ -222,7 +222,7 @@ const Odontograma: React.FC = () => {
   const [selectedHistoricoId, setSelectedHistoricoId] = useState<number | null>(null);
   const [selectedHistoricoCorrelativo, setSelectedHistoricoCorrelativo] = useState<string | null>(null);
   const [loadingHistorico, setLoadingHistorico] = useState<boolean>(false);
-  const [historicoFilterDate, setHistoricoFilterDate] = useState<string>(() => toLocalDateInput(new Date()));
+  const [historicoFilterDate, setHistoricoFilterDate] = useState<string>('');
 
   const filteredHistoricoList = useMemo(() => {
     if (!historicoFilterDate) return historicoList;
@@ -257,6 +257,8 @@ const Odontograma: React.FC = () => {
   const loadHistorico = async (nroCuenta: string) => {
     try {
       setLoadingHistorico(true);
+      setSelectedHistoricoId(null);
+      setSelectedHistoricoCorrelativo(null);
       const resp = await fetch(`${API_BASE}/odontograma/historico/${nroCuenta}`);
       if (!resp.ok) throw new Error('Error cargando histórico');
       const data: HistoricoItem[] = await resp.json();
@@ -1004,7 +1006,56 @@ useEffect(() => {
   return () => {};
 }, []);
 
-const handleDownloadPdf = async () => {
+const printPdfBlob = (blob: Blob) => {
+  const blobUrl = URL.createObjectURL(blob);
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.opacity = '0';
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    URL.revokeObjectURL(blobUrl);
+    iframe.remove();
+  };
+
+  iframe.onload = () => {
+    const win = iframe.contentWindow;
+    if (!win) {
+      cleanup();
+      return;
+    }
+
+    // Esperar a que el visor PDF termine de inicializar antes de invocar print().
+    setTimeout(() => {
+      try {
+        win.focus();
+        win.print();
+      } catch (err) {
+        console.error('Error al imprimir PDF:', err);
+        cleanup();
+      }
+    }, 200);
+
+    win.addEventListener('afterprint', cleanup, { once: true });
+    // Fallback por si afterprint no dispara en algunos navegadores/visores.
+    setTimeout(cleanup, 120000);
+  };
+
+  document.body.appendChild(iframe);
+  iframe.src = blobUrl;
+};
+
+const exportPdf = async ({
+  download,
+  print,
+}: {
+  download: boolean;
+  print: boolean;
+}) => {
   const target = containerRef.current;
   if (!target) {
     setSaveMessage({ show: true, text: '✗ No se encontró contenido para exportar', type: 'error' });
@@ -1064,9 +1115,24 @@ const handleDownloadPdf = async () => {
 
     const fileDate = toLocalDateInput(new Date());
     const filePatient = (historyValue || accountNumber || 'odontograma').replace(/\s+/g, '-');
-    pdf.save(`${filePatient}-${fileDate}.pdf`);
+    const fileName = `${filePatient}-${fileDate}.pdf`;
 
-    setSaveMessage({ show: true, text: '✓ PDF descargado correctamente', type: 'success' });
+    if (download) {
+      pdf.save(fileName);
+    }
+
+    if (print) {
+      const pdfBlob = pdf.output('blob');
+      printPdfBlob(pdfBlob);
+    }
+
+    const messageText = download && print
+      ? '✓ PDF descargado y enviado a impresión'
+      : print
+        ? '✓ Documento enviado a impresión'
+        : '✓ PDF descargado correctamente';
+
+    setSaveMessage({ show: true, text: messageText, type: 'success' });
     setTimeout(() => setSaveMessage({ show: false, text: '', type: 'info' }), 2500);
   } catch (error) {
     console.error('Error generando PDF:', error);
@@ -1077,6 +1143,14 @@ const handleDownloadPdf = async () => {
       node.style.display = previousSummaryDisplay[idx];
     });
   }
+};
+
+const handleDownloadPdf = async () => {
+  await exportPdf({ download: true, print: false });
+};
+
+const handlePrintPdf = async () => {
+  await exportPdf({ download: false, print: true });
 };
 
   const [teethStatus, setTeethStatus] = useState<TeethStatus>({});
@@ -5060,23 +5134,42 @@ const handleDownloadPdf = async () => {
               Limpiar
             </button>
             {(odontogramaId || versionId) && (
-              <button
-                onClick={handleDownloadPdf}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2563eb')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#3b82f6')}
-                style={{
-                  ...styles.statusButton,
-                  backgroundColor: '#3b82f6',
-                  color: 'white',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  gridColumn: '1 / -1',
-                }}
-              >
-                🖨 Descargar PDF
-              </button>
+              <>
+                <button
+                  onClick={handleDownloadPdf}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2563eb')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#3b82f6')}
+                  style={{
+                    ...styles.statusButton,
+                    backgroundColor: '#3b82f6',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    gridColumn: '1 / -1',
+                  }}
+                >
+                  🖨 Descargar PDF
+                </button>
+                <button
+                  onClick={handlePrintPdf}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#1e40af')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#1d4ed8')}
+                  style={{
+                    ...styles.statusButton,
+                    backgroundColor: '#1d4ed8',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    gridColumn: '1 / -1',
+                  }}
+                >
+                  🖨 Imprimir
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -6131,15 +6224,33 @@ const handleDownloadPdf = async () => {
                     onFocus={(e) => { e.currentTarget.style.borderColor = '#1d4ed8'; }}
                     onBlur={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; }}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setHistoricoFilterDate('')}
+                    style={{
+                      alignSelf: 'flex-start',
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      backgroundColor: 'white',
+                      color: '#334155',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Mostrar todos
+                  </button>
                 </div>
                 <select
-                  value={selectedHistoricoId || ''}
-                  size={Math.min(5, Math.max(1, filteredHistoricoList.length))}
+                  value={selectedHistoricoId ? String(selectedHistoricoId) : ''}
+                  size={5}
                   onChange={(e) => {
-                    const correlativo = e.target.selectedOptions[0]?.dataset.correlativo;
-                    if (correlativo) {
-                      loadHistoricoOdontograma(correlativo);
-                    }
+                    const selectedId = Number(e.target.value);
+                    if (!selectedId) return;
+                    const selectedItem = filteredHistoricoList.find((item) => item.Id === selectedId);
+                    if (!selectedItem) return;
+                    setSelectedHistoricoId(selectedItem.Id);
+                    loadHistoricoOdontograma(selectedItem.Correlativo);
                   }}
                   disabled={loadingHistorico}
                   style={{
@@ -6163,11 +6274,13 @@ const handleDownloadPdf = async () => {
                   onFocus={(e) => { e.currentTarget.style.borderColor = '#1d4ed8'; }}
                   onBlur={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; }}
                 >
+                  <option value="" disabled style={{ color: '#64748b', background: 'white' }}>
+                    Selecciona un histórico...
+                  </option>
                   {filteredHistoricoList.map((item) => (
                     <option
                       key={item.Id}
                       value={item.Id}
-                      data-correlativo={item.Correlativo}
                       style={{ color: '#111827', background: 'white' }}
                     >
                       {item.Correlativo} - {new Date(item.Fecha_Creacion).toLocaleDateString('es-ES', {
