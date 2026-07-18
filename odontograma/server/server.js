@@ -18,11 +18,11 @@ app.use(express.json({ limit: '10mb' }));
 const dbConfig = {
   user: process.env.DB_USER || 'alonsog2',
   password: process.env.DB_PASSWORD || process.env.DB_PASS || 'alonsog2',
-  server: process.env.DB_SERVER || 'localhost',
+  server: process.env.DB_SERVER || '192.168.80.11',
   port: parseInt(process.env.DB_PORT || '1433', 10),
   database: process.env.DB_NAME || 'SIGH',
   options: {
-    encrypt: parseBooleanEnv(process.env.DB_ENCRYPT, true),
+    encrypt: parseBooleanEnv(process.env.DB_ENCRYPT, false),
     trustServerCertificate: parseBooleanEnv(process.env.DB_TRUST_SERVER_CERTIFICATE, true),
     enableArithAbort: true,
   },
@@ -1545,37 +1545,78 @@ app.post('/api/odontograma/:id/diente/extraccion', async (req, res) => {
 });
 
 // Create/Upsert a catalog code
+async function queryCatalogCodes(searchTerm) {
+  const limit = searchTerm ? 50 : 100;
+  const qLike = searchTerm ? `%${searchTerm}%` : null;
+  const tablesRs = await pool.request().query("SELECT name FROM sys.tables WHERE name IN ('CatalogoProcedimiento','FactCatalogoServicios','Diagnosticos')");
+  const available = new Set((tablesRs.recordset || []).map((r) => r.name));
+
+  const candidates = [];
+  if (available.has('CatalogoProcedimiento')) {
+    candidates.push(`SELECT TOP (@limit)
+      C.Codigo AS Codigo,
+      C.Descripcion AS Descripcion,
+      C.Categoria AS Categoria,
+      C.ColorDefault AS ColorDefault,
+      1 AS Activo
+    FROM dbo.CatalogoProcedimiento C
+    WHERE (@qLike IS NULL OR C.Codigo LIKE @qLike OR C.Descripcion LIKE @qLike OR C.Categoria LIKE @qLike)
+    ORDER BY C.Codigo`);
+  }
+
+  if (available.has('FactCatalogoServicios')) {
+    candidates.push(`SELECT TOP (@limit)
+      C.Codigo AS Codigo,
+      C.Nombre AS Descripcion,
+      'SERVICIO' AS Categoria,
+      NULL AS ColorDefault,
+      1 AS Activo
+    FROM dbo.FactCatalogoServicios C
+    WHERE (@qLike IS NULL OR C.Codigo LIKE @qLike OR C.Nombre LIKE @qLike OR C.CodMINSA LIKE @qLike OR C.codigoSIS LIKE @qLike)
+    ORDER BY C.Codigo`);
+  }
+
+  if (available.has('Diagnosticos')) {
+    candidates.push(`SELECT TOP (@limit)
+      COALESCE(NULLIF(D.CodigoCIE10,''), NULLIF(D.CodigoCIE2004,''), NULLIF(D.codigoCIEsinPto,''), CAST(D.IdDiagnostico AS NVARCHAR(50))) AS Codigo,
+      D.Descripcion AS Descripcion,
+      'DIAGNOSTICO' AS Categoria,
+      NULL AS ColorDefault,
+      ISNULL(D.EsActivo, 1) AS Activo
+    FROM dbo.Diagnosticos D
+    WHERE (@qLike IS NULL
+      OR D.CodigoCIE10 LIKE @qLike
+      OR D.CodigoCIE2004 LIKE @qLike
+      OR D.codigoCIEsinPto LIKE @qLike
+      OR D.Descripcion LIKE @qLike)
+    ORDER BY Codigo`);
+  }
+
+  let lastError = null;
+  for (const sqlText of candidates) {
+    try {
+      const r = pool.request();
+      r.input('limit', sql.Int, limit);
+      r.input('qLike', sql.NVarChar(200), qLike);
+      const rs = await r.query(sqlText);
+      if (rs.recordset && rs.recordset.length > 0) return rs.recordset;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (lastError) {
+    console.error('No se pudo consultar codigos desde las fuentes disponibles', lastError);
+  }
+  return [];
+}
+
 app.get('/api/codigos', async (req, res) => {
   try {
     await initDb();
     const q = (req.query.q || '').toString().trim();
-    const r = pool.request();
-    if (q) {
-      r.input('q', sql.NVarChar(200), `%${q}%`);
-      const result = await r.query(`
-        SELECT TOP 50
-          C.Codigo AS Codigo,
-          C.Descripcion AS Descripcion,
-          C.Categoria AS Categoria,
-          C.ColorDefault AS ColorDefault,
-          1 AS Activo
-        FROM dbo.CatalogoProcedimiento C
-        WHERE (C.Codigo LIKE @q OR C.Descripcion LIKE @q OR C.Categoria LIKE @q)
-        ORDER BY C.Codigo
-      `);
-      return res.json(result.recordset);
-    }
-    const result = await r.query(`
-      SELECT TOP 100
-        C.Codigo AS Codigo,
-        C.Descripcion AS Descripcion,
-        C.Categoria AS Categoria,
-        C.ColorDefault AS ColorDefault,
-        1 AS Activo
-      FROM dbo.CatalogoProcedimiento C
-      ORDER BY C.Codigo
-    `);
-    res.json(result.recordset);
+    const rows = await queryCatalogCodes(q || null);
+    res.json(rows);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error obteniendo codigos' });
@@ -1587,6 +1628,15 @@ app.post('/api/codigos', async (req, res) => {
     await initDb();
     const { codigo, descripcion, categoria, colorDefault } = req.body;
     if (!codigo || !descripcion) return res.status(400).json({ error: 'codigo y descripcion requeridos' });
+
+    const existsRs = await pool.request().query("SELECT OBJECT_ID('dbo.CatalogoProcedimiento','U') AS Obj");
+    const tableExists = existsRs.recordset && existsRs.recordset[0] && existsRs.recordset[0].Obj;
+    if (!tableExists) {
+      return res.status(400).json({
+        error: 'No se puede guardar en catálogo local porque dbo.CatalogoProcedimiento no existe en esta base.'
+      });
+    }
+
     const r = pool.request();
     r.input('Codigo', sql.NVarChar(50), codigo);
     r.input('Descripcion', sql.NVarChar(500), descripcion);
